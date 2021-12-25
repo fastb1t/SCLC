@@ -1,9 +1,15 @@
 #include <tchar.h>
+#include <string>
+#include <vector>
 #include <windows.h>
 #include <windowsx.h>
+#include <commctrl.h>
 
 #include "wnd_proc.h"
+#include "comments_settings_dlg_proc.h"
 #include "resource.h"
+#include "algorithms.h"
+#include "ntdll.h"
 
 static BOOL OnCreate(HWND, LPCREATESTRUCT);                                     	// WM_CREATE
 static void OnCommand(HWND, int, HWND, UINT);                                      	// WM_COMMAND
@@ -17,11 +23,375 @@ static void OnDestroy(HWND);                                                    
 #define IDC_IGNORE_EMPTY_LINE       1005
 #define IDC_IGNORE_COMMENT_LINE     1006
 #define IDC_IGNORE_DUPLICATE_FILE   1007
-#define IDC_COMMENT_SETTINGS        1008
+#define IDC_COMMENTS_SETTINGS       1008
 #define IDC_RUN                     1009
 
+static String g_sMainPath;
+
+static HINSTANCE g_hInstance = NULL;
+static HWND g_hWnd = NULL;
+
 static HBRUSH g_hBackgroundBrush = NULL;
+static HFONT g_hTitleFont = NULL;
 static HFONT g_hDefaultFont = NULL;
+
+enum class STATUS {
+    STATUS_EMPTY = 0,
+    STATUS_WAIT = 1, // В ожидании.
+    STATUS_PROCESSING = 2, // Обработка.
+    STATUS_DONE = 3, // Завершено.
+};
+
+enum class RESULT {
+    RESULT_EMPTY = 0,
+    RESULT_DONE = 1, // Строк кода: N.
+    RESULT_IGNORED = 2, // Проигнорирован: дубликат файла N.
+    RESULT_NOT_FOUND = 3 // Файл не найден.
+};
+
+struct FileData {
+    TCHAR szFileName[MAX_PATH];
+    TCHAR szPath[MAX_PATH];
+    uint32_t crc32;
+    STATUS status;
+    RESULT result;
+    uint32_t lines;
+};
+
+static std::vector<FileData*> g_data;
+
+static size_t g_AllLines = 0;
+static size_t g_AllLinesNoFilters = 0;
+
+
+// [ClearData]:
+static void ClearData()
+{
+    if (g_data.size() > 0)
+    {
+        for (std::vector<FileData*>::const_iterator it = g_data.begin(); it != g_data.end(); it++)
+        {
+            delete (*it);
+        }
+
+        g_data.clear();
+    }
+}
+// [/ClearData]
+
+
+// [AddFile]:
+static void AddFile(const String& sFile)
+{
+    if (sFile.empty())
+    {
+        MessageBox(g_hWnd, _T("Указано пустое имя файла."), _T("Ошибка"), MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    size_t pos = sFile.rfind('\\');
+    if (pos == std::string::npos)
+    {
+        MessageBox(g_hWnd, _T("Указан неверный путь к файлу."), _T("Ошибка"), MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    String sFileName = sFile.substr(pos + 1, sFile.length() - pos - 1);
+    String sPath = sFile.substr(0, pos);
+
+    if (sFileName.length() >= MAX_PATH || sPath.length() >= MAX_PATH)
+    {
+        MessageBox(g_hWnd, _T("Имя файла или путь к нему превышает допустимую длину."), _T("Ошибка"), MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    HWND hListViewWnd = GetDlgItem(g_hWnd, IDC_LIST);
+    if (!hListViewWnd)
+    {
+        return;
+    }
+    
+    FileData* fd = new (std::nothrow) FileData;
+    if (fd == nullptr)
+    {
+        MessageBox(g_hWnd, _T("Failed to allocate memory."), _T("Error"), MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    lstrcpy(fd->szFileName, sFileName.c_str());
+    lstrcpy(fd->szPath, sPath.c_str());
+
+    fd->crc32 = 0;
+    fd->status = STATUS::STATUS_EMPTY;
+    fd->result = RESULT::RESULT_EMPTY;
+    fd->lines = 0;
+
+    g_data.push_back(fd);
+
+    LV_ITEM lvi;
+    memset(&lvi, 0, sizeof(LV_ITEM));
+
+    lvi.mask = LVIF_TEXT;
+    lvi.iItem = ListView_GetItemCount(hListViewWnd);
+
+    ListView_InsertItem(hListViewWnd, &lvi);
+    ListView_SetItemText(hListViewWnd, lvi.iItem, 1, (LPSTR)sFileName.c_str());
+    ListView_SetItemText(hListViewWnd, lvi.iItem, 2, (LPSTR)sPath.c_str());
+}
+// [/AddFile]
+
+
+// [SetStatus]:
+static void SetStatus(HWND hListViewWnd, int iItem, STATUS status)
+{
+    String sStr;
+
+    switch (status)
+    {
+    case STATUS::STATUS_WAIT:
+    {
+        sStr = _T("В ожидании");
+    }
+    break;
+
+    case STATUS::STATUS_PROCESSING:
+    {
+        sStr = _T("Обработка");
+    }
+    break;
+
+    case STATUS::STATUS_DONE:
+    {
+        sStr = _T("Завершено");
+    }
+    break;
+    }
+
+    if (iItem < (int)g_data.size())
+    {
+        g_data[iItem]->status = status;
+    }
+
+    ListView_SetItemText(hListViewWnd, iItem, 4, (LPSTR)sStr.c_str());
+}
+// [/SetStatus]
+
+
+// [SetResult]:
+static void SetResult(HWND hListViewWnd, int iItem, RESULT result, const String& sParam = _T(""))
+{
+    String sStr;
+
+    switch (result)
+    {
+    case RESULT::RESULT_DONE:
+    {
+        sStr = _T("Строк кода: ");
+        sStr += sParam;
+    }
+    break;
+
+    case RESULT::RESULT_IGNORED:
+    {
+        sStr = _T("Проигнорирован: дубликат файла ");
+        sStr += sParam;
+    }
+    break;
+
+    case RESULT::RESULT_NOT_FOUND:
+    {
+        sStr = _T("Файл не найден");
+    }
+    break;
+    }
+
+    if (iItem < (int)g_data.size())
+    {
+        g_data[iItem]->result = result;
+    }
+
+    ListView_SetItemText(hListViewWnd, iItem, 5, (LPSTR)sStr.c_str());
+}
+// [/SetResult]
+
+
+// [Thread0]:
+static DWORD WINAPI Thread0(LPVOID lpArgument)
+{
+    HWND hWnd = (HWND)lpArgument;
+    HWND hListViewWnd = GetDlgItem(hWnd, IDC_LIST);
+
+    SetClassLongPtr(hWnd, GCL_STYLE, GetClassLongPtr(hWnd, GCL_STYLE) | CS_NOCLOSE);
+
+    int iItem = -1;
+    //for (std::vector<FileData*>::iterator it = g_data.begin(); it != g_data.end(); it++)
+    for (size_t i = 0; i < g_data.size(); i++)
+    {
+        iItem++;
+
+        SetStatus(hListViewWnd, iItem, STATUS::STATUS_WAIT);
+        SetResult(hListViewWnd, iItem, RESULT::RESULT_EMPTY);
+    }
+
+
+    // Настройки.
+    bool bIgnoreEmptyLines = Button_GetCheck(GetDlgItem(hWnd, IDC_IGNORE_EMPTY_LINE));
+    bool bIgnoreCommentLine = Button_GetCheck(GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE));
+    bool bIgnoreDuplicateFile = Button_GetCheck(GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE));
+
+
+    g_AllLines = 0;
+    g_AllLinesNoFilters = 0;
+
+    iItem = -1;
+
+    // Перебираем всі файлі зі списку.
+    for (std::vector<FileData*>::iterator it = g_data.begin(); it != g_data.end(); it++)
+    {
+        iItem++;
+
+        String sFile = BuildPath((*it)->szPath, (*it)->szFileName);
+
+        SetStatus(hListViewWnd, iItem, STATUS::STATUS_PROCESSING);
+        
+        if (!FileExists(sFile))
+        {
+            SetStatus(hListViewWnd, iItem, STATUS::STATUS_DONE);
+            SetResult(hListViewWnd, iItem, RESULT::RESULT_NOT_FOUND);
+
+            continue;
+        }
+
+
+        BYTE* lpBuffer = nullptr;
+        DWORD dwFileSize = 0;
+
+        HANDLE hFile = CreateFile(sFile.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            dwFileSize = GetFileSize(hFile, NULL);
+            if (dwFileSize > 16 * 1024 * 1024) // Max File Size == 16 MB.
+            {
+                MessageBox(hWnd, _T("Слишком большой размер файла."), _T("Ошибка!"), MB_OK | MB_ICONERROR | MB_TOPMOST);
+
+                CloseHandle(hFile);
+                continue;
+            }
+
+            lpBuffer = new (std::nothrow) BYTE[dwFileSize + 1];
+            if (lpBuffer == nullptr)
+            {
+                MessageBox(hWnd, _T("Failed to allocate memory."), _T("Error!"), MB_OK | MB_ICONERROR | MB_TOPMOST);
+
+                CloseHandle(hFile);
+                continue;
+            }
+
+            DWORD dwReaded;
+            if (!ReadFile(hFile, lpBuffer, dwFileSize, &dwReaded, NULL))
+            {
+                MessageBox(hWnd, _T("Failed to read data."), _T("Error!"), MB_OK | MB_ICONERROR | MB_TOPMOST);
+                
+                delete[] lpBuffer;
+                CloseHandle(hFile);
+                continue;
+            }
+
+            (*it)->crc32 = RtlComputeCrc32(0, lpBuffer, dwFileSize);
+
+            StringStream ss;
+            ss << std::uppercase << std::hex << (*it)->crc32;
+            String sTmp = ss.str();
+
+            ListView_SetItemText(GetDlgItem(hWnd, IDC_LIST), iItem, 3, (LPSTR)sTmp.c_str());
+
+            CloseHandle(hFile);
+        }
+        else
+        {
+            SetStatus(hListViewWnd, iItem, STATUS::STATUS_DONE);
+            SetResult(hListViewWnd, iItem, RESULT::RESULT_NOT_FOUND);
+
+            continue;
+        }
+        
+        if (bIgnoreDuplicateFile)
+        {
+            bool bDuplicateFound = false;
+            int iIndex = -1;
+            for (std::vector<FileData*>::const_iterator it2 = g_data.begin(); it2 != g_data.end(); it2++)
+            //for (std::vector<FileData*>::const_iterator it2 = g_data.begin() + iItem; it2 != g_data.end(); it2++)
+            {
+                iIndex++;
+
+                //if (it != it2 && (*it)->crc32 == (*it2)->crc32)
+                if ((*it)->crc32 == (*it2)->crc32)
+                {
+                    bDuplicateFound = true;
+                    break;
+                }
+            }
+
+            if (bDuplicateFound)
+            {
+                SetStatus(hListViewWnd, iItem, STATUS::STATUS_DONE);
+                SetResult(hListViewWnd, iItem, RESULT::RESULT_IGNORED, ToString(iIndex + 1));
+
+                if (lpBuffer)
+                {
+                    delete[] lpBuffer;
+                }
+
+                continue;
+            }
+        }
+
+        // ...
+
+        int iLinesCounter = 0;
+
+        char cPrev = 0;
+        for (size_t i = 0; i < dwFileSize; i++)
+        {
+            if (lpBuffer[i] == '\r')
+            {
+                continue;
+            }
+
+            if (lpBuffer[i] == '\n')
+            {
+                if (cPrev == '\n' && bIgnoreEmptyLines)
+                {
+                    continue;
+                }
+                
+                iLinesCounter++;
+            }
+
+            cPrev = lpBuffer[i];
+        }
+
+        SetStatus(hListViewWnd, iItem, STATUS::STATUS_DONE);
+        SetResult(hListViewWnd, iItem, RESULT::RESULT_DONE, ToString(iLinesCounter));
+
+        g_AllLines += iLinesCounter;
+        g_AllLinesNoFilters += std::count(lpBuffer, lpBuffer + dwFileSize, '\n') + 1;
+
+        if (lpBuffer)
+        {
+            delete[] lpBuffer;
+        }
+
+        Sleep(10);
+    }
+
+    SetClassLongPtr(hWnd, GCL_STYLE, GetClassLongPtr(hWnd, GCL_STYLE) & ~CS_NOCLOSE);
+
+    InvalidateRect(hWnd, NULL, FALSE);
+
+    ExitThread(0);
+}
+// [/Thread0]
 
 
 // [WindowProcedure]: 
@@ -46,6 +416,119 @@ LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
     }
     break;
 
+    case WM_NOTIFY:
+    {
+        LPNMHDR lpNMHDR = reinterpret_cast<LPNMHDR>(lParam);
+        if (lpNMHDR)
+        {
+            if (lpNMHDR->code == NM_CUSTOMDRAW && lpNMHDR->idFrom == IDC_LIST)
+            {
+                LPNMLVCUSTOMDRAW lpNMLVCD = reinterpret_cast<LPNMLVCUSTOMDRAW>(lParam);
+                if (lpNMLVCD)
+                {
+                    switch (lpNMLVCD->nmcd.dwDrawStage)
+                    {
+                    case CDDS_PREPAINT:
+                    {
+                        return CDRF_NOTIFYITEMDRAW;
+                    }
+                    break;
+
+                    case CDDS_ITEMPREPAINT:
+                    {
+                        lpNMLVCD->nmcd.uItemState &= ~CDIS_SELECTED;
+                        if (ListView_GetItemState(lpNMLVCD->nmcd.hdr.hwndFrom, lpNMLVCD->nmcd.dwItemSpec, LVIS_SELECTED))
+                        {
+                            lpNMLVCD->clrTextBk = RGB(220, 220, 210);
+                        }
+                        return CDRF_NOTIFYSUBITEMDRAW;
+                    }
+                    break;
+
+                    case CDDS_SUBITEM | CDDS_ITEMPREPAINT:
+                    {
+                        switch (lpNMLVCD->iSubItem)
+                        {
+                        case 0:
+                        {
+                            TCHAR szText[12] = { 0 };
+                            wsprintf(szText, _T("%d"), lpNMLVCD->nmcd.dwItemSpec + 1);
+
+                            SIZE size;
+                            GetTextExtentPoint32(lpNMLVCD->nmcd.hdc, szText, lstrlen(szText), &size);
+                            TextOut(
+                                lpNMLVCD->nmcd.hdc,
+                                lpNMLVCD->nmcd.rc.left,
+                                lpNMLVCD->nmcd.rc.top + ((lpNMLVCD->nmcd.rc.bottom - lpNMLVCD->nmcd.rc.top) >> 1) - (size.cy >> 1),
+                                szText,
+                                lstrlen(szText)
+                            );
+
+                            return CDRF_SKIPDEFAULT;
+                        }
+                        break;
+
+                        case 4:
+                        {
+                            switch (g_data[lpNMLVCD->nmcd.dwItemSpec]->status)
+                            {
+                            case STATUS::STATUS_EMPTY:
+                                break;
+
+                            case STATUS::STATUS_WAIT:
+                                break;
+
+                            case STATUS::STATUS_PROCESSING:
+                                break;
+
+                            case STATUS::STATUS_DONE:
+                                break;
+                            }
+                        }
+                        break;
+
+                        case 5:
+                        {
+                            switch (g_data[lpNMLVCD->nmcd.dwItemSpec]->result)
+                            {
+                            case RESULT::RESULT_EMPTY:
+                                break;
+
+                            case RESULT::RESULT_DONE:
+                                lpNMLVCD->clrText = RGB(0, 150, 0);
+                                break;
+
+                            case RESULT::RESULT_IGNORED:
+                                lpNMLVCD->clrText = RGB(150, 150, 0);
+                                break;
+
+                            case RESULT::RESULT_NOT_FOUND:
+                                lpNMLVCD->clrText = RGB(150, 0, 0);
+                                break;
+                            }
+                        }
+                        break;
+
+                        default:
+                        {
+                            lpNMLVCD->clrText = RGB(0, 0, 0);
+                        }
+                        break;
+                        }
+
+                        return CDRF_NEWFONT;
+                    }
+                    break;
+
+                    default:
+                        return CDRF_DODEFAULT;
+                    }
+                }
+            }
+        }
+    }
+    break;
+
     case WM_ERASEBKGND:
         return 1;
     }
@@ -57,58 +540,121 @@ LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 // [OnCreate]: WM_CREATE
 static BOOL OnCreate(HWND hWnd, LPCREATESTRUCT lpcs)
 {
+    if (!NTDLL_Init())
+    {
+        MessageBox(NULL, _T("RtlComputeCrc32 not found."), _T("Error"), MB_OK | MB_ICONERROR | MB_TOPMOST);
+        return FALSE;
+    }
+
+    INITCOMMONCONTROLSEX icсex;
+    icсex.dwICC = ICC_LISTVIEW_CLASSES;
+    InitCommonControlsEx(&icсex);
+
+    g_sMainPath = GetThisPath(lpcs->hInstance);
+
+    g_hInstance = lpcs->hInstance;
+    g_hWnd = hWnd;
+
+    Comments_SettingsFile(BuildPath(g_sMainPath, _T("comments.ini")));
+    Comments_Init();
+
+
     RECT rc;
     GetClientRect(hWnd, &rc);
     const int iWindowWidth = rc.right - rc.left;
     const int iWindowHeight = rc.bottom - rc.top;
 
     
-    g_hBackgroundBrush = CreateSolidBrush(RGB(210, 210, 210));
+    g_hBackgroundBrush = CreateSolidBrush(RGB(210, 220, 220));
 
-    g_hDefaultFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    g_hTitleFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, _T("Arial"));
 
+    g_hDefaultFont = CreateFont(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, _T("Arial"));
 
-    CreateWindowEx(0, _T("listbox"), _T(""), WS_CHILD | WS_VISIBLE | LBS_NOINTEGRALHEIGHT,
-        10, 30, iWindowWidth - 20, 200, hWnd, (HMENU)IDC_LIST, lpcs->hInstance, NULL);
+    
+    HWND hListViewWnd = CreateWindowEx(0, WC_LISTVIEW, _T(""), WS_CHILD | WS_VISIBLE | WS_BORDER | WS_HSCROLL | WS_VSCROLL | LVS_REPORT,
+        10, 40, iWindowWidth - 20, 220, hWnd, (HMENU)IDC_LIST, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_LIST), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
 
+    ListView_SetExtendedListViewStyle(hListViewWnd, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
-    int iWidth = (iWindowWidth - 40) / 3;
+    LVCOLUMN lvc;
+    memset(&lvc, 0, sizeof(LVCOLUMN));
 
-    CreateWindowEx(0, _T("button"), _T("Добавить"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        10, 240, iWidth, 20, hWnd, (HMENU)IDC_LIST_ADD, lpcs->hInstance, NULL);
-    SendMessage(GetDlgItem(hWnd, IDC_LIST_ADD), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+    lvc.fmt = LVCFMT_LEFT;
+    
+    lvc.cx = 30;
+    lvc.pszText = (LPSTR)_T("№");
+    ListView_InsertColumn(hListViewWnd, 0, &lvc);
+    
+    lvc.cx = 150;
+    lvc.pszText = (LPSTR)_T("Файл");
+    ListView_InsertColumn(hListViewWnd, 1, &lvc);
+    
+    lvc.cx = 200;
+    lvc.pszText = (LPSTR)_T("Путь к файлу");
+    ListView_InsertColumn(hListViewWnd, 2, &lvc);
 
-    CreateWindowEx(0, _T("button"), _T("Удалить"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        20 + iWidth, 240, iWidth, 20, hWnd, (HMENU)IDC_LIST_DEL, lpcs->hInstance, NULL);
-    SendMessage(GetDlgItem(hWnd, IDC_LIST_DEL), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    lvc.cx = 70;
+    lvc.pszText = (LPSTR)_T("CRC32");
+    ListView_InsertColumn(hListViewWnd, 3, &lvc);
 
-    CreateWindowEx(0, _T("button"), _T("Очистить"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        30 + 2 * iWidth, 240, iWidth, 20, hWnd, (HMENU)IDC_LIST_CLEAR, lpcs->hInstance, NULL);
-    SendMessage(GetDlgItem(hWnd, IDC_LIST_CLEAR), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    lvc.cx = 110;
+    lvc.pszText = (LPSTR)_T("Статус");
+    ListView_InsertColumn(hListViewWnd, 4, &lvc);
+
+    lvc.cx = 240;
+    lvc.pszText = (LPSTR)_T("Результат");
+    ListView_InsertColumn(hListViewWnd, 5, &lvc);
+    
+    
+    CreateWindowEx(0, _T("button"), _T(""), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_BITMAP,
+        iWindowWidth - 102, 8, 24, 24, hWnd, (HMENU)IDC_LIST_ADD, lpcs->hInstance, NULL);
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_LIST_ADD), _T("Добавить"));
+    SendMessage(GetDlgItem(hWnd, IDC_LIST_ADD), BM_SETIMAGE, (WPARAM)IMAGE_BITMAP, (LPARAM)LoadBitmap(lpcs->hInstance, MAKEINTRESOURCE(IDB_LIST_ADD)));
+
+
+    CreateWindowEx(0, _T("button"), _T(""), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_BITMAP,
+        iWindowWidth - 68, 8, 24, 24, hWnd, (HMENU)IDC_LIST_DEL, lpcs->hInstance, NULL);
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_LIST_DEL), _T("Удалить"));
+    SendMessage(GetDlgItem(hWnd, IDC_LIST_DEL), BM_SETIMAGE, (WPARAM)IMAGE_BITMAP, (LPARAM)LoadBitmap(lpcs->hInstance, MAKEINTRESOURCE(IDB_LIST_DEL)));
+
+
+    CreateWindowEx(0, _T("button"), _T(""), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_BITMAP,
+        iWindowWidth - 34, 8, 24, 24, hWnd, (HMENU)IDC_LIST_CLEAR, lpcs->hInstance, NULL);
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_LIST_CLEAR), _T("Очистить"));
+    SendMessage(GetDlgItem(hWnd, IDC_LIST_CLEAR), BM_SETIMAGE, (WPARAM)IMAGE_BITMAP, (LPARAM)LoadBitmap(lpcs->hInstance, MAKEINTRESOURCE(IDB_LIST_CLEAR)));
 
 
     CreateWindowEx(0, _T("button"), _T("Игнорировать пустые строки"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        10, 300, iWindowWidth - 20, 20, hWnd, (HMENU)IDC_IGNORE_EMPTY_LINE, lpcs->hInstance, NULL);
+        10, 350, iWindowWidth - 20, 20, hWnd, (HMENU)IDC_IGNORE_EMPTY_LINE, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_IGNORE_EMPTY_LINE), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    Button_SetCheck(GetDlgItem(hWnd, IDC_IGNORE_EMPTY_LINE), TRUE);
 
     CreateWindowEx(0, _T("button"), _T("Игнорировать строки содержащие лишь комментарий"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        10, 330, iWindowWidth - 130, 20, hWnd, (HMENU)IDC_IGNORE_COMMENT_LINE, lpcs->hInstance, NULL);
+        10, 380, 330/*iWindowWidth - 50*/, 20, hWnd, (HMENU)IDC_IGNORE_COMMENT_LINE, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    Button_SetCheck(GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE), TRUE);
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE), _T("Нажмите \"Настроить\" для редактирования списка комментариев языков программирования"));
 
-    CreateWindowEx(0, _T("button"), _T("Игнорировать файлы с одинаковым содержимым (сравнение файлов с одинаковыми именами)"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        10, 360, iWindowWidth - 20, 20, hWnd, (HMENU)IDC_IGNORE_DUPLICATE_FILE, lpcs->hInstance, NULL);
+    CreateWindowEx(0, _T("button"), _T("Игнорировать файлы с одинаковым содержимым"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        10, 410, iWindowWidth - 20, 20, hWnd, (HMENU)IDC_IGNORE_DUPLICATE_FILE, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    Button_SetCheck(GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE), TRUE);
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE), _T("Сравнение по контрольной сумме."));
 
 
-    CreateWindowEx(0, _T("button"), _T("Настроить"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        iWindowWidth - 110, 330, 100, 20, hWnd, (HMENU)IDC_COMMENT_SETTINGS, lpcs->hInstance, NULL);
-    SendMessage(GetDlgItem(hWnd, IDC_COMMENT_SETTINGS), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
+    CreateWindowEx(0, _T("button"), _T(""), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_BITMAP,
+        350/*iWindowWidth - 34*/, 378, 24, 24, hWnd, (HMENU)IDC_COMMENTS_SETTINGS, lpcs->hInstance, NULL);
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_COMMENTS_SETTINGS), _T("Настроить"));
+    SendMessage(GetDlgItem(hWnd, IDC_COMMENTS_SETTINGS), BM_SETIMAGE, (WPARAM)IMAGE_BITMAP, (LPARAM)LoadBitmap(lpcs->hInstance, MAKEINTRESOURCE(IDB_COMMENTS_SETTINGS)));
 
 
     CreateWindowEx(0, _T("button"), _T("Запуск"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        (iWindowWidth >> 1) - 75, iWindowHeight - 30, 150, 20, hWnd, (HMENU)IDC_RUN, lpcs->hInstance, NULL);
+        (iWindowWidth >> 1) - 75, iWindowHeight - 35, 150, 25, hWnd, (HMENU)IDC_RUN, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_RUN), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
 
     return TRUE;
@@ -123,31 +669,74 @@ static void OnCommand(HWND hWnd, int id, HWND hWndCtl, UINT codeNotify)
     {
     case IDC_LIST_ADD:
     {
+        TCHAR szFileName[1024] = { 0 };
+        memset(szFileName, 0, sizeof(szFileName));
 
+        OPENFILENAME ofn;
+        memset(&ofn, 0, sizeof(OPENFILENAME));
+
+        ofn.lStructSize = sizeof(OPENFILENAME);
+        ofn.hwndOwner = hWnd;
+        ofn.lpstrFile = szFileName;
+        ofn.nMaxFile = sizeof(szFileName);
+        ofn.lpstrFilter = _T("Все файлы (*.*)\0*.*\0\0");
+        ofn.nFilterIndex = 0;
+        ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_HIDEREADONLY;
+
+        if (GetOpenFileName(&ofn))
+        {
+            String sPath = ofn.lpstrFile;
+
+            TCHAR* pStr = ofn.lpstrFile + ofn.nFileOffset;
+            do {
+                AddFile(BuildPath(sPath, pStr));
+                pStr += lstrlen(pStr) + 1;
+            } while (*pStr != '\0');
+        }
     }
     break;
 
     case IDC_LIST_DEL:
     {
+        HWND hListViewWnd = GetDlgItem(hWnd, IDC_LIST);
 
+        int i = -1;
+        while ((i = ListView_GetNextItem(hListViewWnd, -1, LVNI_SELECTED)) != -1)
+        {
+            ListView_DeleteItem(hListViewWnd, i);
+
+            delete (*(g_data.begin() + i));
+
+            g_data.erase(g_data.begin() + i);
+        }
     }
     break;
 
     case IDC_LIST_CLEAR:
     {
-        ListBox_ResetContent(GetDlgItem(hWnd, IDC_LIST));
+        ListView_DeleteAllItems(GetDlgItem(hWnd, IDC_LIST));
+
+        ClearData();
     }
     break;
 
-    case IDC_COMMENT_SETTINGS:
+    case IDC_COMMENTS_SETTINGS:
     {
-
+        DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_COMMENTS_SETTINGS), hWnd, CommentsSettings_DialogProcedure);
     }
     break;
 
     case IDC_RUN:
     {
-
+        if (g_data.size() > 0)
+        {
+            DWORD dwThreadID;
+            HANDLE hThread = CreateThread(NULL, 0, Thread0, (LPVOID)hWnd, 0, &dwThreadID);
+            if (hThread)
+            {
+                CloseHandle(hThread);
+            }
+        }
     }
     break;
     }
@@ -172,41 +761,39 @@ static void OnPaint(HWND hWnd)
 
     int iOldBkMode = SetBkMode(hMemDC, TRANSPARENT);
     HFONT hOldFont = (HFONT)GetCurrentObject(hMemDC, OBJ_FONT);
-    HBRUSH hOldBrush = (HBRUSH)GetCurrentObject(hMemDC, OBJ_BRUSH);
-    HPEN hOldPen = (HPEN)GetCurrentObject(hMemDC, OBJ_PEN);
-    COLORREF clrOldColor = GetTextColor(hMemDC);
 
     TCHAR szText[1024] = { 0 };
+    SIZE size;
 
-
-    SelectObject(hMemDC, g_hDefaultFont);
     SetTextColor(hMemDC, RGB(0, 0, 0));
+
+    SelectObject(hMemDC, g_hTitleFont);
 
     lstrcpy(szText, _T("Файлы проекта"));
     TextOut(hMemDC, 10, 10, szText, lstrlen(szText));
 
-    MoveToEx(hMemDC, 10, 270, NULL);
-    LineTo(hMemDC, iWindowWidth - 10, 270);
+    DrawLine(hMemDC, 10, 320, iWindowWidth - 10, 320);
 
-    lstrcpy(szText, _T("Опции"));
-    TextOut(hMemDC, 10, 280, szText, lstrlen(szText));
+    lstrcpy(szText, _T("Фильтры"));
+    TextOut(hMemDC, 10, 330, szText, lstrlen(szText));
 
-    MoveToEx(hMemDC, 10, 390, NULL);
-    LineTo(hMemDC, iWindowWidth - 10, 390);
+    DrawLine(hMemDC, 10, 440, iWindowWidth - 10, 440);
 
-    lstrcpy(szText, _T("Количество файлов: 0"));
-    TextOut(hMemDC, 10, 400, szText, lstrlen(szText));
 
-    lstrcpy(szText, _T("Количество строк кода: 0"));
-    TextOut(hMemDC, 10, 420, szText, lstrlen(szText));
+    SelectObject(hMemDC, g_hDefaultFont);
+    
+    wsprintf(szText, _T("Общее количество строк кода: %d"), g_AllLines);
+    TextOut(hMemDC, 10, 270, szText, lstrlen(szText));
 
-    lstrcpy(szText, _T("Количество строк кода (без фильтров): 0"));
-    TextOut(hMemDC, 10, 440, szText, lstrlen(szText));
+    wsprintf(szText, _T("Общее количество строк кода (без фильтров): %d"), g_AllLinesNoFilters);
+    TextOut(hMemDC, 10, 290, szText, lstrlen(szText));
     
 
-    SetTextColor(hMemDC, clrOldColor);
-    SelectObject(hMemDC, hOldPen);
-    SelectObject(hMemDC, hOldBrush);
+    lstrcpy(szText, _T("Copyright \251 fastb1t, 2020"));
+    GetTextExtentPoint32(hMemDC, szText, lstrlen(szText), &size);
+    TextOut(hMemDC, iWindowWidth - size.cx - 10, iWindowHeight - size.cy - 10, szText, lstrlen(szText));
+
+
     SelectObject(hMemDC, hOldFont);
     SetBkMode(hMemDC, iOldBkMode);
 
@@ -223,7 +810,14 @@ static void OnPaint(HWND hWnd)
 static void OnDestroy(HWND hWnd)
 {
     DeleteObject(g_hBackgroundBrush);
+    DeleteObject(g_hTitleFont);
     DeleteObject(g_hDefaultFont);
+
+    Comments_Clear();
+
+    ClearData();
+
+    NTDLL_Release();
 
     PostQuitMessage(0);
 }

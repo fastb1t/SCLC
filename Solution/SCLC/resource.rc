@@ -1,3 +1,52 @@
 #include "resource.h"
 
+#include <windows.h>
 
+IDI_ICON1               ICON    "ResourceFiles\\icon.ico"
+ 
+IDB_LIST_ADD            BITMAP  "ResourceFiles\\add.bmp"
+IDB_LIST_DEL            BITMAP  "ResourceFiles\\del.bmp"
+IDB_LIST_CLEAR          BITMAP  "ResourceFiles\\clear.bmp"
+IDB_COMMENTS_SETTINGS   BITMAP  "ResourceFiles\\settings.bmp"
+
+IDD_COMMENTS_SETTINGS DIALOG 10, 10, 400, 200
+EXSTYLE WS_EX_APPWINDOW | WS_EX_TOPMOST
+STYLE WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_POPUP
+CAPTION "Комментарии языков программирования"
+BEGIN
+END
+
+IDD_ADD_COMMENT DIALOG 10, 10, 400, 200
+EXSTYLE WS_EX_APPWINDOW | WS_EX_TOPMOST
+STYLE WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_POPUP
+CAPTION "Добавление комментария"
+BEGIN
+END
+
+1 RT_MANIFEST "ResourceFiles\\manifest.xml"
+
+1 VERSIONINFO
+FILEVERSION 1, 0, 0, 0
+PRODUCTVERSION 1, 0, 0, 0
+FILETYPE VFT_APP // VFT_APP = 0x00000001L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            //VALUE "CompanyName", "\0"
+            VALUE "LegalCopyright", "Copyright \251 2020 fastb1t\0"
+            VALUE "ProductName", "SCLC\0"
+            VALUE "ProductVersion", "1.0.0\0"
+            VALUE "FileVersion", "1.0.0\0"
+            VALUE "FileDescription", "Source Code Line Counter\0"
+            VALUE "OriginalFilename", "SCLC.exe\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        // 0x0419 = Russian language
+        // 0x04E3 = 1251 = Cyrillic characters
+        VALUE "Translation", 0x0419, 0x04E3
+    END
+END

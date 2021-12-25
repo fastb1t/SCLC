@@ -4,6 +4,9 @@
 #include "wnd_proc.h"
 #include "resource.h"
 
+#pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "comctl32.lib")
+
 
 // [_tWinMain]: entry point.
 int WINAPI _tWinMain(
@@ -48,7 +51,7 @@ int WINAPI _tWinMain(
     DWORD dwExStyle = WS_EX_APPWINDOW;
 
     RECT rc;
-    SetRect(&rc, 0, 0, 700, 500);
+    SetRect(&rc, 0, 0, 840, 500);
     AdjustWindowRectEx(&rc, dwStyle, FALSE, dwExStyle);
 
     const int iWindowWidth = rc.right - rc.left;
@@ -65,16 +68,18 @@ int WINAPI _tWinMain(
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = 0;
     wcex.hInstance = hInstance;
-    wcex.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
     wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
     wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wcex.lpszMenuName = NULL;
     wcex.lpszClassName = szClassName;
-    wcex.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+    wcex.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
 
     if (!RegisterClassEx(&wcex))
     {
         MessageBox(NULL, _T("Window Registration Failed."), _T("Error!"), MB_OK | MB_ICONERROR | MB_TOPMOST);
+        ReleaseMutex(hMutex);
+        CloseHandle(hMutex);
         return 1;
     }
 
@@ -96,6 +101,8 @@ int WINAPI _tWinMain(
     {
         MessageBox(NULL, _T("Window Creation Failed."), _T("Error!"), MB_OK | MB_ICONERROR | MB_TOPMOST);
         UnregisterClass(szClassName, hInstance);
+        ReleaseMutex(hMutex);
+        CloseHandle(hMutex);
         return 1;
     }
 
@@ -118,6 +125,8 @@ int WINAPI _tWinMain(
     }
 
     UnregisterClass(szClassName, hInstance);
+    ReleaseMutex(hMutex);
+    CloseHandle(hMutex);
     return (int)msg.wParam;
 }
 // [/_tWinMain]

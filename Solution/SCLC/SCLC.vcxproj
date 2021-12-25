@@ -146,10 +146,18 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="add_comment_dlg_proc.cpp" />
+    <ClCompile Include="algorithms.cpp" />
+    <ClCompile Include="comments_settings_dlg_proc.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="ntdll.cpp" />
     <ClCompile Include="wnd_proc.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="add_comment_dlg_proc.h" />
+    <ClInclude Include="algorithms.h" />
+    <ClInclude Include="comments_settings_dlg_proc.h" />
+    <ClInclude Include="ntdll.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="wnd_proc.h" />
   </ItemGroup>
