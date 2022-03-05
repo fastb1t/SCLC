@@ -1,6 +1,7 @@
 #include <tchar.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
@@ -45,7 +46,7 @@ enum class STATUS {
 enum class RESULT {
     RESULT_EMPTY = 0,
     RESULT_DONE = 1, // Строк кода: N.
-    RESULT_IGNORED = 2, // Проигнорирован: дубликат файла N.
+    RESULT_IGNORED = 2, // Проигнорирован: дубликат файла №N.
     RESULT_NOT_FOUND = 3 // Файл не найден.
 };
 
@@ -193,7 +194,7 @@ static void SetResult(HWND hListViewWnd, int iItem, RESULT result, const String&
 
     case RESULT::RESULT_IGNORED:
     {
-        sStr = _T("Проигнорирован: дубликат файла ");
+        sStr = _T("Проигнорирован: дубликат файла №");
         sStr += sParam;
     }
     break;
@@ -224,8 +225,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
     SetClassLongPtr(hWnd, GCL_STYLE, GetClassLongPtr(hWnd, GCL_STYLE) | CS_NOCLOSE);
 
     int iItem = -1;
-    //for (std::vector<FileData*>::iterator it = g_data.begin(); it != g_data.end(); it++)
-    for (size_t i = 0; i < g_data.size(); i++)
+    for (std::vector<FileData*>::iterator it = g_data.begin(); it != g_data.end(); it++)
     {
         iItem++;
 
@@ -245,16 +245,20 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
     iItem = -1;
 
+
     // Перебираем всі файлі зі списку.
-    for (std::vector<FileData*>::iterator it = g_data.begin(); it != g_data.end(); it++)
+
+    String sCurrentFileName;
+
+    for (std::vector<FileData*>::iterator CurrentFileIterator = g_data.begin(); CurrentFileIterator != g_data.end(); CurrentFileIterator++)
     {
         iItem++;
 
-        String sFile = BuildPath((*it)->szPath, (*it)->szFileName);
+        sCurrentFileName = BuildPath((*CurrentFileIterator)->szPath, (*CurrentFileIterator)->szFileName);
 
         SetStatus(hListViewWnd, iItem, STATUS::STATUS_PROCESSING);
-        
-        if (!FileExists(sFile))
+
+        if (!FileExists(sCurrentFileName))
         {
             SetStatus(hListViewWnd, iItem, STATUS::STATUS_DONE);
             SetResult(hListViewWnd, iItem, RESULT::RESULT_NOT_FOUND);
@@ -266,7 +270,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
         BYTE* lpBuffer = nullptr;
         DWORD dwFileSize = 0;
 
-        HANDLE hFile = CreateFile(sFile.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        HANDLE hFile = CreateFile(sCurrentFileName.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile != INVALID_HANDLE_VALUE)
         {
             dwFileSize = GetFileSize(hFile, NULL);
@@ -276,6 +280,11 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
                 CloseHandle(hFile);
                 continue;
+            }
+
+            if (dwFileSize == 0)
+            {
+
             }
 
             lpBuffer = new (std::nothrow) BYTE[dwFileSize + 1];
@@ -291,16 +300,16 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
             if (!ReadFile(hFile, lpBuffer, dwFileSize, &dwReaded, NULL))
             {
                 MessageBox(hWnd, _T("Failed to read data."), _T("Error!"), MB_OK | MB_ICONERROR | MB_TOPMOST);
-                
+
                 delete[] lpBuffer;
                 CloseHandle(hFile);
                 continue;
             }
 
-            (*it)->crc32 = RtlComputeCrc32(0, lpBuffer, dwFileSize);
+            (*CurrentFileIterator)->crc32 = RtlComputeCrc32(0, lpBuffer, dwFileSize);
 
             StringStream ss;
-            ss << std::uppercase << std::hex << (*it)->crc32;
+            ss << std::uppercase << std::hex << (*CurrentFileIterator)->crc32;
             String sTmp = ss.str();
 
             ListView_SetItemText(GetDlgItem(hWnd, IDC_LIST), iItem, 3, (LPSTR)sTmp.c_str());
@@ -314,18 +323,16 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
             continue;
         }
-        
+
         if (bIgnoreDuplicateFile)
         {
             bool bDuplicateFound = false;
             int iIndex = -1;
-            for (std::vector<FileData*>::const_iterator it2 = g_data.begin(); it2 != g_data.end(); it2++)
-            //for (std::vector<FileData*>::const_iterator it2 = g_data.begin() + iItem; it2 != g_data.end(); it2++)
+            for (std::vector<FileData*>::const_iterator it = g_data.begin(); it != g_data.end(); it++)
             {
                 iIndex++;
 
-                //if (it != it2 && (*it)->crc32 == (*it2)->crc32)
-                if ((*it)->crc32 == (*it2)->crc32)
+                if ((*CurrentFileIterator)->crc32 == (*it)->crc32 && CurrentFileIterator > it)
                 {
                     bDuplicateFound = true;
                     break;
@@ -346,9 +353,331 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
             }
         }
 
-        // ...
 
-        int iLinesCounter = 0;
+
+        // Фильтрируем коментарии.
+
+        std::vector<CommentInfo*> comments;
+
+        const std::string sCurrentFileExtension = GetFileExtension(sCurrentFileName);
+        if (sCurrentFileExtension.length() > 0)
+        {
+            const std::vector<CommentInfo*> all_comments = Comments_GetAllComments();
+            if (all_comments.size() > 0)
+            {
+                std::string sExtension;
+
+                for (std::vector<CommentInfo*>::const_iterator it = all_comments.begin(); it != all_comments.end(); it++)
+                {
+                    if (lstrlen((*it)->szFileExtension) > 0)
+                    {
+                        sExtension = (*it)->szFileExtension;
+
+                        if ((*it)->szFileExtension[0] != '.')
+                        {
+                            sExtension.insert(sExtension.begin(), '.');
+                        }
+
+                        if (sCurrentFileExtension == sExtension)
+                        {
+                            comments.push_back((*it));
+                        }
+                    }
+                }
+            }
+        }
+
+
+
+        // Подсчитать количество строк (учитывая фильтр для игнорирования пустых строк и фильтр игнорирования строк содержащих лишь коментарий).
+
+        /*
+        int iLinesCounter = 1;
+
+        std::string first_buff;
+        std::string second_buff;
+
+        std::vector<CommentInfo*>::const_iterator CurrentCommentIterator = comments.end();
+
+        char cPrev = 0; // Предыдущий символ.
+        for (size_t i = 0; i < dwFileSize; i++)
+        {
+            // Игнорируем символ возврата каретки.
+            if (lpBuffer[i] == '\r')
+            {
+                continue;
+            }
+
+            // Если подключён фильтр для игнорирования строк содержащих лишь комментарий.
+            if (bIgnoreCommentLine)
+            {
+                // Если комментарий ещё не найден и буфер с первыми символами очередной строки не пустой.
+                if (!first_buff.empty() && CurrentCommentIterator == comments.end())
+                {
+                    // Ищем комментарий.
+                    CurrentCommentIterator = std::find_if(comments.begin(), comments.end(), [first_buff](CommentInfo* comment) {
+                        return first_buff == comment->szBeginComment;
+                    });
+                }
+
+                // Если комментарий ещё не найден.
+                if (CurrentCommentIterator == comments.end())
+                {
+                    if (lpBuffer[i] == '\n')
+                    {
+                        if (cPrev == '\n' && bIgnoreEmptyLines)
+                        {
+                            continue;
+                        }
+
+                        iLinesCounter++;
+
+                        first_buff.clear();
+                        second_buff.clear();
+                    }
+                    else
+                    {
+                        if (first_buff.empty() && cPrev == '\n')
+                        {
+                            first_buff.push_back(lpBuffer[i]);
+                        }
+                        else if (!first_buff.empty())
+                        {
+                            first_buff.push_back(lpBuffer[i]);
+                        }
+                    }
+                }
+                // Если найдено начало комментария.
+                else
+                {
+                    if ((*CurrentCommentIterator)->bEndCommentAtEndLine)
+                    {
+                        CurrentCommentIterator = comments.end();
+
+                        first_buff.clear();
+                        second_buff.clear();
+
+                        iLinesCounter--;
+                    }
+                    else
+                    {
+
+                    }
+                }
+            }
+            // Если фильтр для игнорирования строк содержащих лишь комментарий не подключён.
+            else
+            {
+                if (lpBuffer[i] == '\n')
+                {
+                    if (cPrev == '\n' && bIgnoreEmptyLines)
+                    {
+                        continue;
+                    }
+
+                    iLinesCounter++;
+                }
+            }
+
+            cPrev = lpBuffer[i];
+        }
+        //*/
+
+                
+
+        std::string buff((char*)lpBuffer, dwFileSize);
+
+        // Удаляем символы возврата каретки.
+        buff.erase(std::remove(buff.begin(), buff.end(), '\r'), buff.end());
+
+        // Заменяем табуляцию пробелами.
+        std::replace(buff.begin(), buff.end(), '\t', ' ');
+
+
+
+        // Если задействовано правило для игнорирования строк содержащих лишь комментарий.
+        if (bIgnoreCommentLine)
+        {
+            enum class SEARCH_STRING_QUEUE {
+                COMMENT_BEGIN = 1,
+                COMMENT_END = 2
+            };
+
+            SEARCH_STRING_QUEUE SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
+
+            std::string sSearchString;
+
+            size_t CurrentPos = 0;
+
+            size_t CommentBeginPos = 0;
+            size_t CommentEndPos = 0;
+
+            std::string sComment;
+
+
+            // Сначала удаляем комментарии, которые могут занимать несколько строк.
+            for (std::vector<CommentInfo*>::const_iterator it = comments.begin(); it != comments.end(); it++)
+            {
+                if ((*it)->bEndCommentAtEndLine == true)
+                {
+                    continue;
+                }
+
+
+                SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
+
+                sSearchString = (*it)->szBeginComment;
+
+                CurrentPos = 0;
+
+                CommentBeginPos = 0;
+                CommentEndPos = 0;
+
+                sComment.clear();
+
+
+                while ((CurrentPos = buff.find(sSearchString, CurrentPos)) != std::string::npos)
+                {
+                    switch (SearchStringQueue)
+                    {
+                    case SEARCH_STRING_QUEUE::COMMENT_BEGIN:
+                    {
+                        SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_END;
+
+                        CommentBeginPos = CurrentPos;
+
+                        CurrentPos += lstrlen((*it)->szBeginComment);
+
+                        sSearchString = (*it)->szEndComment;
+                    }
+                    break;
+
+                    case SEARCH_STRING_QUEUE::COMMENT_END:
+                    {
+                        SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
+
+                        CommentEndPos = CurrentPos + lstrlen((*it)->szEndComment);
+
+                        CurrentPos += lstrlen((*it)->szEndComment);
+
+                        sSearchString = (*it)->szBeginComment;
+                    }
+                    break;
+                    }
+
+
+                    if (CommentBeginPos != 0 && CommentEndPos != 0)
+                    {
+                        sComment = buff.substr(CommentBeginPos, CommentEndPos - CommentBeginPos);
+
+                        bool b = false;
+
+                        if (std::count(sComment.begin(), sComment.end(), '\n') > 0)
+                        {
+                            size_t pos1 = buff.rfind('\n', CommentBeginPos);
+                            size_t pos2 = buff.find('\n', CommentEndPos);
+                            
+                            if (buff.substr(pos1 + 1, CommentBeginPos - pos1 - 1).length() > 0 &&
+                                buff.substr(CommentEndPos, pos2 - CommentEndPos).length() > 0)
+                            {
+                                b = true;
+                            }
+                        }
+
+                        buff.erase(CommentBeginPos, CommentEndPos - CommentBeginPos);
+
+                        if (b)
+                        {
+                            buff.insert(buff.begin() + CommentBeginPos, '\n');
+                        }
+
+                        CommentBeginPos = 0;
+                        CommentEndPos = 0;
+
+                        sComment.clear();
+                    }
+                }
+            }
+
+            // Удаляем комментарии, которые заканчиваются в конце строки.
+            for (std::vector<CommentInfo*>::const_iterator it = comments.begin(); it != comments.end(); it++)
+            {
+                if ((*it)->bEndCommentAtEndLine == false)
+                {
+                    continue;
+                }
+
+                
+                SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
+
+                sSearchString = (*it)->szBeginComment;
+
+                CurrentPos = 0;
+
+                CommentBeginPos = 0;
+                CommentEndPos = 0;
+
+                sComment.clear();
+
+
+                while ((CurrentPos = buff.find(sSearchString, CurrentPos)) != std::string::npos)
+                {
+                    switch (SearchStringQueue)
+                    {
+                    case SEARCH_STRING_QUEUE::COMMENT_BEGIN:
+                    {
+                        SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_END;
+
+                        CommentBeginPos = CurrentPos;
+
+                        CurrentPos += lstrlen((*it)->szBeginComment);
+
+                        sSearchString = "\n";
+                    }
+                    break;
+
+                    case SEARCH_STRING_QUEUE::COMMENT_END:
+                    {
+                        SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
+
+                        CommentEndPos = CurrentPos;
+
+                        CurrentPos += 1; // lstrlen("\n");
+
+                        sSearchString = (*it)->szBeginComment;
+                    }
+                    break;
+                    }
+
+
+                    if (CommentBeginPos != 0 && CommentEndPos != 0)
+                    {
+                        sComment = buff.substr(CommentBeginPos, CommentEndPos - CommentBeginPos);
+
+                        buff.erase(CommentBeginPos, CommentEndPos - CommentBeginPos);
+
+                        CommentBeginPos = 0;
+                        CommentEndPos = 0;
+
+                        sComment.clear();
+                    }
+                }
+            }
+            //*/
+
+        }
+
+
+
+        // TODO: Удалить пробелы в пустых строках.
+
+
+
+
+        // Подсчитать количество строк (учитывая только фильтр для игнорирования пустых строк).
+
+        //*
+        int iLinesCounter = 1;
 
         char cPrev = 0;
         for (size_t i = 0; i < dwFileSize; i++)
@@ -364,18 +693,21 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
                 {
                     continue;
                 }
-                
+
                 iLinesCounter++;
             }
 
             cPrev = lpBuffer[i];
         }
+        //*/
+
+
 
         SetStatus(hListViewWnd, iItem, STATUS::STATUS_DONE);
         SetResult(hListViewWnd, iItem, RESULT::RESULT_DONE, ToString(iLinesCounter));
 
         g_AllLines += iLinesCounter;
-        g_AllLinesNoFilters += std::count(lpBuffer, lpBuffer + dwFileSize, '\n') + 1;
+        g_AllLinesNoFilters += std::count(lpBuffer, lpBuffer + dwFileSize, '\n');
 
         if (lpBuffer)
         {
@@ -630,7 +962,7 @@ static BOOL OnCreate(HWND hWnd, LPCREATESTRUCT lpcs)
 
 
     CreateWindowEx(0, _T("button"), _T("Игнорировать пустые строки"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        10, 350, iWindowWidth - 20, 20, hWnd, (HMENU)IDC_IGNORE_EMPTY_LINE, lpcs->hInstance, NULL);
+        10, 350, 330/*iWindowWidth - 20*/, 20, hWnd, (HMENU)IDC_IGNORE_EMPTY_LINE, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_IGNORE_EMPTY_LINE), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
     Button_SetCheck(GetDlgItem(hWnd, IDC_IGNORE_EMPTY_LINE), TRUE);
 
@@ -638,10 +970,11 @@ static BOOL OnCreate(HWND hWnd, LPCREATESTRUCT lpcs)
         10, 380, 330/*iWindowWidth - 50*/, 20, hWnd, (HMENU)IDC_IGNORE_COMMENT_LINE, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
     Button_SetCheck(GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE), TRUE);
-    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE), _T("Нажмите \"Настроить\" для редактирования списка комментариев языков программирования"));
+    CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_IGNORE_COMMENT_LINE),
+        _T("Нажмите \"Настроить\" для редактирования списка комментариев языков программирования"));
 
     CreateWindowEx(0, _T("button"), _T("Игнорировать файлы с одинаковым содержимым"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        10, 410, iWindowWidth - 20, 20, hWnd, (HMENU)IDC_IGNORE_DUPLICATE_FILE, lpcs->hInstance, NULL);
+        10, 410, 330/*iWindowWidth - 20*/, 20, hWnd, (HMENU)IDC_IGNORE_DUPLICATE_FILE, lpcs->hInstance, NULL);
     SendMessage(GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE), WM_SETFONT, (WPARAM)g_hDefaultFont, 0L);
     Button_SetCheck(GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE), TRUE);
     CreateToolTip(lpcs->hInstance, GetDlgItem(hWnd, IDC_IGNORE_DUPLICATE_FILE), _T("Сравнение по контрольной сумме."));
@@ -789,7 +1122,7 @@ static void OnPaint(HWND hWnd)
     TextOut(hMemDC, 10, 290, szText, lstrlen(szText));
     
 
-    lstrcpy(szText, _T("Copyright \251 fastb1t, 2020"));
+    lstrcpy(szText, _T("Copyright \251 fastb1t, 2022"));
     GetTextExtentPoint32(hMemDC, szText, lstrlen(szText), &size);
     TextOut(hMemDC, iWindowWidth - size.cx - 10, iWindowHeight - size.cy - 10, szText, lstrlen(szText));
 

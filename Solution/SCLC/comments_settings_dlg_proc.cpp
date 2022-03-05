@@ -27,14 +27,6 @@ static HFONT g_hDefaultFont = NULL;
 
 static String g_sSettingsFileName;
 
-struct CommentInfo {
-    TCHAR szLangName[128];
-    TCHAR szFileExtension[128];
-    TCHAR szBeginComment[128];
-    TCHAR szEndComment[128];
-    bool bEndCommentAtEndLine;
-};
-
 static std::vector<CommentInfo*> g_comments;
 static std::vector<CommentInfo*> g_tmp_comments;
 
@@ -219,6 +211,14 @@ void Comments_Add(
     ListView_SetItemText(hListViewWnd, lvi.iItem, 3, (LPSTR)comment.c_str());
 }
 // [/Comments_Add]
+
+
+// [Comments_GetAllComments]:
+const std::vector<CommentInfo*> Comments_GetAllComments()
+{
+    return g_comments;
+}
+// [/Comments_GetAllComments]
 
 
 // [SynchronizeComments]:
