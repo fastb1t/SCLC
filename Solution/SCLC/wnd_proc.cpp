@@ -367,137 +367,46 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
             {
                 std::string sExtension;
 
-                for (std::vector<CommentInfo*>::const_iterator it = all_comments.begin(); it != all_comments.end(); it++)
+                for (std::vector<CommentInfo*>::const_iterator CommentIterator = all_comments.begin(); CommentIterator != all_comments.end(); CommentIterator++)
                 {
-                    if (lstrlen((*it)->szFileExtension) > 0)
+                    if (lstrlen((*CommentIterator)->szFileExtension) > 0)
                     {
-                        sExtension = (*it)->szFileExtension;
+                        sExtension = (*CommentIterator)->szFileExtension;
 
-                        if ((*it)->szFileExtension[0] != '.')
+                        if ((*CommentIterator)->szFileExtension[0] != '.')
                         {
                             sExtension.insert(sExtension.begin(), '.');
                         }
 
                         if (sCurrentFileExtension == sExtension)
                         {
-                            comments.push_back((*it));
+                            comments.push_back((*CommentIterator));
                         }
                     }
                 }
             }
         }
+        
 
 
-
-        // Подсчитать количество строк (учитывая фильтр для игнорирования пустых строк и фильтр игнорирования строк содержащих лишь коментарий).
-
-        /*
-        int iLinesCounter = 1;
-
-        std::string first_buff;
-        std::string second_buff;
-
-        std::vector<CommentInfo*>::const_iterator CurrentCommentIterator = comments.end();
-
-        char cPrev = 0; // Предыдущий символ.
-        for (size_t i = 0; i < dwFileSize; i++)
-        {
-            // Игнорируем символ возврата каретки.
-            if (lpBuffer[i] == '\r')
-            {
-                continue;
-            }
-
-            // Если подключён фильтр для игнорирования строк содержащих лишь комментарий.
-            if (bIgnoreCommentLine)
-            {
-                // Если комментарий ещё не найден и буфер с первыми символами очередной строки не пустой.
-                if (!first_buff.empty() && CurrentCommentIterator == comments.end())
-                {
-                    // Ищем комментарий.
-                    CurrentCommentIterator = std::find_if(comments.begin(), comments.end(), [first_buff](CommentInfo* comment) {
-                        return first_buff == comment->szBeginComment;
-                    });
-                }
-
-                // Если комментарий ещё не найден.
-                if (CurrentCommentIterator == comments.end())
-                {
-                    if (lpBuffer[i] == '\n')
-                    {
-                        if (cPrev == '\n' && bIgnoreEmptyLines)
-                        {
-                            continue;
-                        }
-
-                        iLinesCounter++;
-
-                        first_buff.clear();
-                        second_buff.clear();
-                    }
-                    else
-                    {
-                        if (first_buff.empty() && cPrev == '\n')
-                        {
-                            first_buff.push_back(lpBuffer[i]);
-                        }
-                        else if (!first_buff.empty())
-                        {
-                            first_buff.push_back(lpBuffer[i]);
-                        }
-                    }
-                }
-                // Если найдено начало комментария.
-                else
-                {
-                    if ((*CurrentCommentIterator)->bEndCommentAtEndLine)
-                    {
-                        CurrentCommentIterator = comments.end();
-
-                        first_buff.clear();
-                        second_buff.clear();
-
-                        iLinesCounter--;
-                    }
-                    else
-                    {
-
-                    }
-                }
-            }
-            // Если фильтр для игнорирования строк содержащих лишь комментарий не подключён.
-            else
-            {
-                if (lpBuffer[i] == '\n')
-                {
-                    if (cPrev == '\n' && bIgnoreEmptyLines)
-                    {
-                        continue;
-                    }
-
-                    iLinesCounter++;
-                }
-            }
-
-            cPrev = lpBuffer[i];
-        }
-        //*/
-
-                
-
-        std::string buff((char*)lpBuffer, dwFileSize);
+        std::string sFileData((char*)lpBuffer, dwFileSize);
 
         // Удаляем символы возврата каретки.
-        buff.erase(std::remove(buff.begin(), buff.end(), '\r'), buff.end());
+        sFileData.erase(std::remove(sFileData.begin(), sFileData.end(), '\r'), sFileData.end());
 
         // Заменяем табуляцию пробелами.
-        std::replace(buff.begin(), buff.end(), '\t', ' ');
+        std::replace(sFileData.begin(), sFileData.end(), '\t', ' ');
+
+        // Удаляем все пробелы.
+        sFileData.erase(std::remove(sFileData.begin(), sFileData.end(), ' '), sFileData.end());
 
 
 
         // Если задействовано правило для игнорирования строк содержащих лишь комментарий.
         if (bIgnoreCommentLine)
         {
+            std::string sComments;
+
             enum class SEARCH_STRING_QUEUE {
                 COMMENT_BEGIN = 1,
                 COMMENT_END = 2
@@ -516,9 +425,9 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
 
             // Сначала удаляем комментарии, которые могут занимать несколько строк.
-            for (std::vector<CommentInfo*>::const_iterator it = comments.begin(); it != comments.end(); it++)
+            for (std::vector<CommentInfo*>::const_iterator CurrentCommentIterator = comments.begin(); CurrentCommentIterator != comments.end(); CurrentCommentIterator++)
             {
-                if ((*it)->bEndCommentAtEndLine == true)
+                if ((*CurrentCommentIterator)->bEndCommentAtEndLine == true)
                 {
                     continue;
                 }
@@ -526,7 +435,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
                 SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
 
-                sSearchString = (*it)->szBeginComment;
+                sSearchString = (*CurrentCommentIterator)->szBeginComment;
 
                 CurrentPos = 0;
 
@@ -536,7 +445,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
                 sComment.clear();
 
 
-                while ((CurrentPos = buff.find(sSearchString, CurrentPos)) != std::string::npos)
+                while ((CurrentPos = sFileData.find(sSearchString, CurrentPos)) != std::string::npos)
                 {
                     switch (SearchStringQueue)
                     {
@@ -546,9 +455,9 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
                         CommentBeginPos = CurrentPos;
 
-                        CurrentPos += lstrlen((*it)->szBeginComment);
+                        CurrentPos += sSearchString.length();
 
-                        sSearchString = (*it)->szEndComment;
+                        sSearchString = (*CurrentCommentIterator)->szEndComment;
                     }
                     break;
 
@@ -556,53 +465,58 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
                     {
                         SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
 
-                        CommentEndPos = CurrentPos + lstrlen((*it)->szEndComment);
+                        CommentEndPos = CurrentPos + lstrlen((*CurrentCommentIterator)->szEndComment);
 
-                        CurrentPos += lstrlen((*it)->szEndComment);
+                        CurrentPos += sSearchString.length();
 
-                        sSearchString = (*it)->szBeginComment;
+                        sSearchString = (*CurrentCommentIterator)->szBeginComment;
                     }
                     break;
                     }
 
 
-                    if (CommentBeginPos != 0 && CommentEndPos != 0)
+                    if (CommentEndPos != 0)
                     {
-                        sComment = buff.substr(CommentBeginPos, CommentEndPos - CommentBeginPos);
+                        sComment = sFileData.substr(CommentBeginPos, CommentEndPos - CommentBeginPos);
 
                         bool b = false;
 
                         if (std::count(sComment.begin(), sComment.end(), '\n') > 0)
                         {
-                            size_t pos1 = buff.rfind('\n', CommentBeginPos);
-                            size_t pos2 = buff.find('\n', CommentEndPos);
+                            size_t pos1 = sFileData.rfind('\n', CommentBeginPos);
+                            size_t pos2 = sFileData.find('\n', CommentEndPos);
                             
-                            if (buff.substr(pos1 + 1, CommentBeginPos - pos1 - 1).length() > 0 &&
-                                buff.substr(CommentEndPos, pos2 - CommentEndPos).length() > 0)
+                            if (sFileData.substr(pos1 + 1, CommentBeginPos - pos1 - 1).length() > 0 &&
+                                sFileData.substr(CommentEndPos, pos2 - CommentEndPos).length() > 0)
                             {
                                 b = true;
                             }
                         }
 
-                        buff.erase(CommentBeginPos, CommentEndPos - CommentBeginPos);
+                        sFileData.erase(CommentBeginPos, CommentEndPos - CommentBeginPos);
 
                         if (b)
                         {
-                            buff.insert(buff.begin() + CommentBeginPos, '\n');
+                            sFileData.insert(sFileData.begin() + CommentBeginPos, '\n');
                         }
+
+                        CurrentPos -= CommentEndPos - CommentBeginPos;
 
                         CommentBeginPos = 0;
                         CommentEndPos = 0;
+
+                        sComments += sComment + "\n";
 
                         sComment.clear();
                     }
                 }
             }
 
+
             // Удаляем комментарии, которые заканчиваются в конце строки.
-            for (std::vector<CommentInfo*>::const_iterator it = comments.begin(); it != comments.end(); it++)
+            for (std::vector<CommentInfo*>::const_iterator CurrentCommentIterator = comments.begin(); CurrentCommentIterator != comments.end(); CurrentCommentIterator++)
             {
-                if ((*it)->bEndCommentAtEndLine == false)
+                if ((*CurrentCommentIterator)->bEndCommentAtEndLine == false)
                 {
                     continue;
                 }
@@ -610,7 +524,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
                 
                 SearchStringQueue = SEARCH_STRING_QUEUE::COMMENT_BEGIN;
 
-                sSearchString = (*it)->szBeginComment;
+                sSearchString = (*CurrentCommentIterator)->szBeginComment;
 
                 CurrentPos = 0;
 
@@ -620,7 +534,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
                 sComment.clear();
 
 
-                while ((CurrentPos = buff.find(sSearchString, CurrentPos)) != std::string::npos)
+                while ((CurrentPos = sFileData.find(sSearchString, CurrentPos)) != std::string::npos)
                 {
                     switch (SearchStringQueue)
                     {
@@ -630,7 +544,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
                         CommentBeginPos = CurrentPos;
 
-                        CurrentPos += lstrlen((*it)->szBeginComment);
+                        CurrentPos += sSearchString.length();
 
                         sSearchString = "\n";
                     }
@@ -642,52 +556,64 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
 
                         CommentEndPos = CurrentPos;
 
-                        CurrentPos += 1; // lstrlen("\n");
+                        CurrentPos += sSearchString.length();
 
-                        sSearchString = (*it)->szBeginComment;
+                        sSearchString = (*CurrentCommentIterator)->szBeginComment;
                     }
                     break;
                     }
 
 
-                    if (CommentBeginPos != 0 && CommentEndPos != 0)
+                    if (CommentEndPos != 0)
                     {
-                        sComment = buff.substr(CommentBeginPos, CommentEndPos - CommentBeginPos);
+                        if (CommentBeginPos > 0)
+                        {
+                            if (sFileData[CommentBeginPos - 1] == '\n')
+                            {
+                                //CommentBeginPos--;
+                            }
+                        }
 
-                        buff.erase(CommentBeginPos, CommentEndPos - CommentBeginPos);
+                        sComment = sFileData.substr(CommentBeginPos, CommentEndPos - CommentBeginPos);
+
+                        sFileData.erase(CommentBeginPos, CommentEndPos - CommentBeginPos);
+
+                        CurrentPos -= CommentEndPos - CommentBeginPos;
 
                         CommentBeginPos = 0;
                         CommentEndPos = 0;
+
+                        sComments += sComment + "\n";
 
                         sComment.clear();
                     }
                 }
             }
-            //*/
 
+
+            MessageBox(hWnd, sComments.c_str(), "", MB_OK);
         }
 
 
 
-        // TODO: Удалить пробелы в пустых строках.
-
+        // TODO: удалять символы перевода на новую строку, если в строке был лишь комментарий.
 
 
 
         // Подсчитать количество строк (учитывая только фильтр для игнорирования пустых строк).
 
         //*
-        int iLinesCounter = 1;
+        int iLinesCounter = 0;// 1;
 
         char cPrev = 0;
-        for (size_t i = 0; i < dwFileSize; i++)
+        for (size_t i = 0; i < sFileData.length(); i++)
         {
-            if (lpBuffer[i] == '\r')
+            if (sFileData[i] == '\r')
             {
                 continue;
             }
 
-            if (lpBuffer[i] == '\n')
+            if (sFileData[i] == '\n')
             {
                 if (cPrev == '\n' && bIgnoreEmptyLines)
                 {
@@ -697,7 +623,7 @@ static DWORD WINAPI Thread0(LPVOID lpArgument)
                 iLinesCounter++;
             }
 
-            cPrev = lpBuffer[i];
+            cPrev = sFileData[i];
         }
         //*/
 
@@ -1018,13 +944,20 @@ static void OnCommand(HWND hWnd, int id, HWND hWndCtl, UINT codeNotify)
 
         if (GetOpenFileName(&ofn))
         {
-            String sPath = ofn.lpstrFile;
+            if (ofn.nFileExtension == 0)
+            {
+                String sPath = ofn.lpstrFile;
 
-            TCHAR* pStr = ofn.lpstrFile + ofn.nFileOffset;
-            do {
-                AddFile(BuildPath(sPath, pStr));
-                pStr += lstrlen(pStr) + 1;
-            } while (*pStr != '\0');
+                TCHAR* pStr = ofn.lpstrFile + ofn.nFileOffset;
+                do {
+                    AddFile(BuildPath(sPath, pStr));
+                    pStr += lstrlen(pStr) + 1;
+                } while (*pStr != '\0');
+            }
+            else
+            {
+                AddFile(ofn.lpstrFile);
+            }
         }
     }
     break;
