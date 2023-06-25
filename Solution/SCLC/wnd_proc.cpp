@@ -219,7 +219,8 @@ static void SetResult(HWND hListViewWnd, int iItem, RESULT result, const String&
 // [Thread0]:
 static DWORD WINAPI Thread0(LPVOID lpArgument)
 {
-    HWND hWnd = (HWND)lpArgument;
+    HWND hWnd = static_cast<HWND>(lpArgument);
+
     HWND hListViewWnd = GetDlgItem(hWnd, IDC_LIST);
 
     SetClassLongPtr(hWnd, GCL_STYLE, GetClassLongPtr(hWnd, GCL_STYLE) | CS_NOCLOSE);
@@ -804,7 +805,8 @@ static BOOL OnCreate(HWND hWnd, LPCREATESTRUCT lpcs)
         return FALSE;
     }
 
-    INITCOMMONCONTROLSEX icñex;
+    INITCOMMONCONTROLSEX icñex = { 0 };
+    icñex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icñex.dwICC = ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&icñex);
 
