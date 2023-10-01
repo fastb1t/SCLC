@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+// Процедура для обробки повідомлень головного вікна.
 LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 #endif

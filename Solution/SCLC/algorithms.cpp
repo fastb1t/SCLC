@@ -4,7 +4,6 @@
 #include <shlwapi.h>
 
 
-// [CreateToolTip]:
 HWND CreateToolTip(HINSTANCE hInstance, HWND hCtrlWnd, const TCHAR* pszText)
 {
     if (!hCtrlWnd || !pszText)
@@ -45,10 +44,7 @@ HWND CreateToolTip(HINSTANCE hInstance, HWND hCtrlWnd, const TCHAR* pszText)
 
     return hTipWnd;
 }
-// [/CreateToolTip]
 
-
-// [GetThisPath]:
 String GetThisPath(HINSTANCE hInstance)
 {
     TCHAR szTemp[2048] = { 0 };
@@ -59,10 +55,7 @@ String GetThisPath(HINSTANCE hInstance)
     }
     return _T("");
 }
-// [/GetThisPath]
 
-
-// [BuildPath]:
 String BuildPath(const String& sPath1, const String& sPath2)
 {
     if (sPath1.empty())
@@ -87,10 +80,7 @@ String BuildPath(const String& sPath1, const String& sPath2)
 
     return sPath1 + sPath2;
 }
-// [/BuildPath]
 
-
-// [FileExists]:
 bool FileExists(const String& sFileName)
 {
     if (sFileName.empty())
@@ -107,10 +97,7 @@ bool FileExists(const String& sFileName)
     }
     return false;
 }
-// [/FileExists]
 
-
-// [DirExists]:
 bool DirExists(const String& sDirName)
 {
     DWORD dwAttr = GetFileAttributes(sDirName.c_str());
@@ -124,22 +111,15 @@ bool DirExists(const String& sDirName)
     }
     return false;
 }
-// [/DirExists]
 
-
-// [GetFileExtension]:
 String GetFileExtension(const String& sFileName)
 {
     TCHAR* lpStr = PathFindExtension(sFileName.c_str());
     return !lpStr ? _T("") : lpStr;
 }
-// [/GetFileExtension]
 
-
-// [DrawLine]:
 BOOL DrawLine(HDC hDC, int x0, int y0, int x1, int y1)
 {
     MoveToEx(hDC, x0, y0, NULL);
     return LineTo(hDC, x1, y1);
 }
-// [/DrawLine]
