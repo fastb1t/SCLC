@@ -990,7 +990,7 @@ static void OnCommand(HWND hWnd, int id, HWND hWndCtl, UINT codeNotify)
 
     case IDC_COMMENTS_SETTINGS:
     {
-        DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_COMMENTS_SETTINGS), hWnd, CommentsSettings_DialogProcedure);
+        DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_COMMENTS_SETTINGS), hWnd, (DLGPROC)CommentsSettings_DialogProcedure);
     }
     break;
 

@@ -55,10 +55,10 @@ BOOL CALLBACK AddComment_DialogProcedure(HWND hWnd, UINT msg, WPARAM wParam, LPA
 // [DlgOnInitDialog]: WM_INITDIALOG
 static BOOL DlgOnInitDialog(HWND hWnd, HWND, LPARAM)
 {
-    HINSTANCE hInstance = (HINSTANCE)GetWindowLongPtr(GetParent(hWnd), GWL_HINSTANCE);
+    HINSTANCE hInstance = (HINSTANCE)GetWindowLongPtr(GetParent(hWnd), GWLP_HINSTANCE);
 
-    SetClassLongPtr(hWnd, GCL_HICON, (LONG)LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1)));
-    SetClassLongPtr(hWnd, GCL_HICONSM, (LONG)LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1)));
+    SetClassLongPtr(hWnd, GCLP_HICON, (LONG)LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1)));
+    SetClassLongPtr(hWnd, GCLP_HICONSM, (LONG)LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1)));
 
     RECT rc;
 

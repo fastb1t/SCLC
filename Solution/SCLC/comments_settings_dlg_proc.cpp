@@ -401,10 +401,10 @@ static BOOL DlgOnInitDialog(HWND hWnd, HWND, LPARAM)
 {
     g_hWnd = hWnd;
 
-    g_hInstance = (HINSTANCE)GetWindowLongPtr(GetParent(hWnd), GWL_HINSTANCE);
+    g_hInstance = (HINSTANCE)GetWindowLongPtr(GetParent(hWnd), GWLP_HINSTANCE);
 
-    SetClassLongPtr(hWnd, GCL_HICON, (LONG)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1)));
-    SetClassLongPtr(hWnd, GCL_HICONSM, (LONG)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1)));
+    SetClassLongPtr(hWnd, GCLP_HICON, (LONG)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1)));
+    SetClassLongPtr(hWnd, GCLP_HICONSM, (LONG)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1)));
 
     RECT rc;
 
@@ -511,7 +511,7 @@ static void DlgOnCommand(HWND hWnd, int id, HWND, UINT)
     {
     case IDC_LIST_ADD:
     {
-        DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_ADD_COMMENT), hWnd, AddComment_DialogProcedure);
+        DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_ADD_COMMENT), hWnd, (DLGPROC)AddComment_DialogProcedure);
 
         InvalidateRect(hWnd, NULL, FALSE);
     }
